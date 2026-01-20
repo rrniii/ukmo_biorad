@@ -125,8 +125,7 @@ for radar in "${RADARS[@]}"; do
 
         # Compute expected outputs by inspecting the pulse/time groups in the input file
         scan_out=""
-        scan_status=0
-        scan_out=$("$PYTHON_BIN" - "$infile" "$OUTPUT_ROOT" "$RAW_ROOT" <<'PY'
+        scan_out=$("$PYTHON_BIN" - "$infile" "$OUTPUT_ROOT" "$RAW_ROOT" 2>>"$RUN_LOG" <<'PY'
 import h5py, os, sys, traceback
 in_path, out_root, raw_root = sys.argv[1:4]
 abs_in = os.path.abspath(in_path)
@@ -153,7 +152,8 @@ except Exception as e:
     sys.stderr.write(f"SCAN_FAILED {abs_in}: {e}\n")
     sys.exit(1)
 PY
-        2>>"$RUN_LOG") || scan_status=$?
+        )
+        scan_status=$?
         if [[ $scan_status -ne 0 ]]; then
             echo "Failed to scan input (skipping submission): ${infile}" | tee -a "$RUN_LOG" >&2
             ((total_skipped++))
