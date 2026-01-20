@@ -1,16 +1,34 @@
 #!/usr/bin/env Rscript
 # Run bioRad/vol2bird for all HDF5 files on a given date directory.
 
+# Auto-add user library if bioRad is installed there.
+user_lib <- file.path(Sys.getenv("HOME", unset = "~"), "R", "library")
+if (dir.exists(file.path(user_lib, "bioRad"))) {
+  .libPaths(c(user_lib, .libPaths()))
+}
+
+# Optionally disable HDF5 file locking before loading bioRad.
+args_pre <- commandArgs(trailingOnly = TRUE)
+disable_hdf5_locking_env <- Sys.getenv("DISABLE_HDF5_LOCKING", unset = "1")
+disable_hdf5_locking <- tolower(disable_hdf5_locking_env) %in% c("1", "true", "yes", "y") ||
+  "--disable-hdf5-locking" %in% args_pre
+if ("--enable-hdf5-locking" %in% args_pre) {
+  disable_hdf5_locking <- FALSE
+}
+if (disable_hdf5_locking) {
+  Sys.setenv(HDF5_USE_FILE_LOCKING = "FALSE")
+}
+
 # Keep startup noise down while loading bioRad.
 suppressPackageStartupMessages(library(bioRad))
 
 # --------- configuration you may want to edit ----------
 # Use environment variables to override defaults without editing this file.
 # Root directory containing vol2bird input files.
-BASE_IN  <- Sys.getenv("RADAR_IN", unset = "/gws/nopw/j04/ncas_radar_vol2/avocet/ukmo-nimrod/vol2birdinput")
+BASE_IN  <- Sys.getenv("RADAR_IN", unset = "/gws/pw/j07/woest/ukmo-nimrod/vol2birdinput")
 
 # Output root (mirrors the input tree down to the date directory).
-BASE_OUT <- Sys.getenv("RADAR_OUT", unset = "/gws/nopw/j04/ncas_radar_vol2/avocet/ukmo-nimrod/biorad_vp")
+BASE_OUT <- Sys.getenv("RADAR_OUT", unset = "/gws/pw/j07/woest/ukmo-nimrod/biorad_vp")
 
 # Which input files to consider as PVOL ODIM H5
 INPUT_PATTERN <- Sys.getenv("RADAR_PATTERN", unset = "\\.h5$")
@@ -18,9 +36,19 @@ INPUT_PATTERN <- Sys.getenv("RADAR_PATTERN", unset = "\\.h5$")
 # Force re-run even if outputs exist (set FORCE=1 or pass --force).
 FORCE_ENV <- Sys.getenv("FORCE", unset = "0")
 
+# Optional override to process a single date directory.
+INPUT_DIR <- ""
+
+# Optional override to process a single file (debug mode).
+INPUT_FILE <- ""
+
+# Optional mode to skip HDF5 output (CSV-only).
+SKIP_H5_ENV <- Sys.getenv("SKIP_H5", unset = "0")
+
 # bioRad/vol2bird settings (C-band dual-pol baseline).
+# NOTE: autoconf must be FALSE to allow per-file nyquist_min overrides.
 VP_SETTINGS <- list(
-  autoconf  = FALSE,  # NOTE: autoconf=TRUE ignores other settings per bioRad docs.
+  autoconf  = FALSE,
   dual_pol  = TRUE,
   rho_hv    = 0.95,
   dealias   = TRUE,
@@ -39,9 +67,12 @@ is_true <- function(x) {
   x %in% c("1", "true", "yes", "y")
 }
 
+# Combine env-based SKIP_H5 with CLI --csv-only.
+skip_h5 <- is_true(SKIP_H5_ENV)
+
 # Print CLI usage.
 usage <- function() {
-  cat("Usage: run_biorad_vp_for_date.R <YYYYMMDD> [--input-root PATH] [--output-root PATH] [--pattern REGEX] [--force]\n")
+  cat("Usage: run_biorad_vp_for_date.R <YYYYMMDD> [--input-root PATH] [--input-dir DIR] [--input-file FILE] [--output-root PATH] [--pattern REGEX] [--csv-only] [--disable-hdf5-locking] [--enable-hdf5-locking] [--force]\n")
 }
 
 # Parse CLI args; first positional arg must be the date string.
@@ -82,6 +113,35 @@ while (i <= length(args)) {
     i <- i + 2
     next
   }
+  if (opt == "--input-dir") {
+    if (i == length(args)) stop("--input-dir requires a value.", call. = FALSE)
+    INPUT_DIR <- args[i + 1]
+    i <- i + 2
+    next
+  }
+  if (opt == "--input-file") {
+    if (i == length(args)) stop("--input-file requires a value.", call. = FALSE)
+    INPUT_FILE <- args[i + 1]
+    i <- i + 2
+    next
+  }
+  if (opt == "--csv-only") {
+    skip_h5 <- TRUE
+    i <- i + 1
+    next
+  }
+  if (opt == "--disable-hdf5-locking") {
+    disable_hdf5_locking <- TRUE
+    Sys.setenv(HDF5_USE_FILE_LOCKING = "FALSE")
+    i <- i + 1
+    next
+  }
+  if (opt == "--enable-hdf5-locking") {
+    disable_hdf5_locking <- FALSE
+    Sys.unsetenv("HDF5_USE_FILE_LOCKING")
+    i <- i + 1
+    next
+  }
   if (opt == "--force") {
     force <- TRUE
     i <- i + 1
@@ -93,6 +153,21 @@ while (i <= length(args)) {
 # Ensure input root exists before scanning.
 if (!dir.exists(BASE_IN)) {
   stop("Input root does not exist: ", BASE_IN, call. = FALSE)
+}
+
+# Prevent conflicting overrides.
+if (nzchar(INPUT_DIR) && nzchar(INPUT_FILE)) {
+  stop("Use only one of --input-dir or --input-file.", call. = FALSE)
+}
+
+# If a specific input directory was provided, ensure it exists.
+if (nzchar(INPUT_DIR) && !dir.exists(INPUT_DIR)) {
+  stop("Input dir does not exist: ", INPUT_DIR, call. = FALSE)
+}
+
+# If a single input file was provided, ensure it exists.
+if (nzchar(INPUT_FILE) && !file.exists(INPUT_FILE)) {
+  stop("Input file does not exist: ", INPUT_FILE, call. = FALSE)
 }
 
 # Normalized input root for safe prefix comparisons.
@@ -123,10 +198,51 @@ relative_to <- function(path, prefix) {
   basename(path_norm)
 }
 
+# Find the date directory (YYYYMMDD) that contains a given file.
+find_date_dir_for_file <- function(path, date_str) {
+  dir <- normalizePath(dirname(path), winslash = "/", mustWork = TRUE)
+  while (dir != "/" && dir != ".") {
+    if (basename(dir) == date_str) return(dir)
+    dir <- dirname(dir)
+  }
+  ""
+}
+
 # Find matching date directories; this allows nested radar/year/date layouts.
-date_dirs <- find_date_dirs(BASE_IN, date_str)
+if (nzchar(INPUT_FILE)) {
+  date_dir <- find_date_dir_for_file(INPUT_FILE, date_str)
+  if (date_dir == "") {
+    stop("Input file is not under a date directory matching ", date_str, call. = FALSE)
+  }
+  date_dirs <- date_dir
+} else if (nzchar(INPUT_DIR)) {
+  input_dir_norm <- normalizePath(INPUT_DIR, winslash = "/", mustWork = TRUE)
+  if (basename(input_dir_norm) != date_str) {
+    stop("Input dir basename must match date: ", basename(input_dir_norm), " != ", date_str, call. = FALSE)
+  }
+  date_dirs <- input_dir_norm
+} else {
+  date_dirs <- find_date_dirs(BASE_IN, date_str)
+}
 if (length(date_dirs) == 0) {
   stop("No date directories found under input root for date: ", date_str, call. = FALSE)
+}
+
+# Determine pulse type from filename/path to support per-pulse settings.
+detect_pulse <- function(path) {
+  base <- basename(path)
+  if (grepl("_lp_", base) || grepl("/lp/", path)) return("lp")
+  if (grepl("_sp_", base) || grepl("/sp/", path)) return("sp")
+  ""
+}
+
+# Apply per-pulse settings: lower nyquist_min for LP; SP uses bioRad defaults.
+settings_for_file <- function(path) {
+  pulse <- detect_pulse(path)
+  if (pulse == "lp") {
+    return(c(VP_SETTINGS, list(nyquist_min = 1)))
+  }
+  VP_SETTINGS
 }
 
 # Wrapper for calculate_vp with dynamic settings list.
@@ -142,7 +258,11 @@ total_skip <- 0L
 # Process each matching date directory.
 for (date_dir in sort(date_dirs)) {
   # Gather all HDF5 files (recursive) for this date directory.
-  files <- list.files(date_dir, pattern = INPUT_PATTERN, recursive = TRUE, full.names = TRUE)
+  if (nzchar(INPUT_FILE)) {
+    files <- normalizePath(INPUT_FILE, winslash = "/", mustWork = TRUE)
+  } else {
+    files <- list.files(date_dir, pattern = INPUT_PATTERN, recursive = TRUE, full.names = TRUE)
+  }
   if (length(files) == 0) {
     cat("No input files in:", date_dir, "\n")
     next
@@ -154,13 +274,19 @@ for (date_dir in sort(date_dirs)) {
   out_dir_csv <- file.path(out_day, "vpts_csv")
   out_dir_h5  <- file.path(out_day, "vp_h5")
   dir.create(out_dir_csv, recursive = TRUE, showWarnings = FALSE)
-  dir.create(out_dir_h5,  recursive = TRUE, showWarnings = FALSE)
+  if (!skip_h5) {
+    dir.create(out_dir_h5,  recursive = TRUE, showWarnings = FALSE)
+  }
 
   cat("Date:", date_str, "\n")
   cat("Input directory:", date_dir, "\n")
   cat("Found", length(files), "file(s)\n")
   cat("Output CSV directory:", out_dir_csv, "\n")
-  cat("Output H5 directory :", out_dir_h5,  "\n\n")
+  if (skip_h5) {
+    cat("Output H5 directory : (disabled)\n\n")
+  } else {
+    cat("Output H5 directory :", out_dir_h5,  "\n\n")
+  }
 
   for (f in sort(files)) {
     # Build output filenames that align with input basenames.
@@ -169,19 +295,26 @@ for (date_dir in sort(date_dirs)) {
     out_h5  <- file.path(out_dir_h5,  paste0(base, "_vp.h5"))
 
     # Skip if outputs already exist and not forcing a re-run.
-    if (!force && file.exists(out_csv) && file.exists(out_h5)) {
+    if (!force && ((skip_h5 && file.exists(out_csv)) || (!skip_h5 && file.exists(out_csv) && file.exists(out_h5)))) {
       cat("Skipping (outputs exist):", f, "\n")
       total_skip <- total_skip + 1L
       next
     }
 
     cat("Processing:", f, "\n")
+    settings <- settings_for_file(f)
     tryCatch({
       # Write both VPTS CSV and ODIM HDF5 outputs.
-      run_vp_write(f, out_csv, VP_SETTINGS)
-      run_vp_write(f, out_h5,  VP_SETTINGS)
+      run_vp_write(f, out_csv, settings)
+      if (!skip_h5) {
+        run_vp_write(f, out_h5,  settings)
+      }
       cat("  OK ->", out_csv, "\n")
-      cat("  OK ->", out_h5,  "\n\n")
+      if (skip_h5) {
+        cat("  OK -> (H5 disabled)\n\n")
+      } else {
+        cat("  OK ->", out_h5,  "\n\n")
+      }
       total_ok <- total_ok + 1L
     }, error = function(e) {
       cat("  FAILED:", conditionMessage(e), "\n\n")

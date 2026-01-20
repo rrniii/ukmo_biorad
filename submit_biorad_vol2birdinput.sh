@@ -10,9 +10,9 @@
 
 set -uo pipefail
 
-RAW_ROOT="/gws/nopw/j04/ncas_radar_vol2/avocet/ukmo-nimrod/raw_h5_data_final"
-OUTPUT_ROOT="/gws/nopw/j04/ncas_radar_vol2/avocet/ukmo-nimrod/vol2birdinput"
-LOG_ROOT="/gws/nopw/j04/ncas_radar_vol2/avocet/ukmo-nimrod/vol2birdinput_logs"
+RAW_ROOT="/gws/pw/j07/woest/ukmo-nimrod/raw_h5_data_final"
+OUTPUT_ROOT="/gws/pw/j07/woest/ukmo-nimrod/vol2birdinput"
+LOG_ROOT="/gws/pw/j07/woest/ukmo-nimrod/vol2birdinput_logs"
 # Default to the nimrod env that has h5py; can override with --python
 PYTHON_BIN="/gws/smf/j04/ncas_radar/software/miniconda3_radar_group_20200519/envs/nimrod/bin/python"
 PARTITION="standard"

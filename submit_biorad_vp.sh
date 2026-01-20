@@ -7,9 +7,9 @@
 
 set -uo pipefail
 
-INPUT_ROOT="/gws/nopw/j04/ncas_radar_vol2/avocet/ukmo-nimrod/vol2birdinput"
-OUTPUT_ROOT="/gws/nopw/j04/ncas_radar_vol2/avocet/ukmo-nimrod/biorad_vp"
-LOG_ROOT="/gws/nopw/j04/ncas_radar_vol2/avocet/ukmo-nimrod/biorad_vp_logs"
+INPUT_ROOT="/gws/pw/j07/woest/ukmo-nimrod/vol2birdinput"
+OUTPUT_ROOT="/gws/pw/j07/woest/ukmo-nimrod/biorad_vp"
+LOG_ROOT="/gws/pw/j07/woest/ukmo-nimrod/biorad_vp_logs"
 PARTITION="standard"
 QOS="short"
 TIME_LIMIT="01:00:00"
@@ -17,6 +17,8 @@ START_DATE="00000000"  # inclusive YYYYMMDD
 END_DATE="99999999"    # inclusive YYYYMMDD
 RADAR_FILTER=""        # if set, only process this radar name
 FORCE=0                # 1 => re-run even if outputs exist
+CSV_ONLY=0             # 1 => write only CSV outputs
+DISABLE_HDF5_LOCKING=1 # 1 => disable HDF5 file locking (default: on)
 MODULE_NAME="jasr"
 R_BIN="Rscript"
 R_LIBS_USER_OVERRIDE=""
@@ -32,6 +34,9 @@ Usage: $(basename "$0") [options]
     -p PARTITION    SLURM partition (default: ${PARTITION}).
     -q QOS          SLURM QoS (default: ${QOS}).
     -t TIME         SLURM time limit (default: ${TIME_LIMIT}).
+    --csv-only      Write CSV outputs only (skip HDF5 VP output).
+    --disable-hdf5-locking  Disable HDF5 file locking (default).
+    --enable-hdf5-locking   Enable HDF5 file locking.
     --in-root DIR   Override input root (default: ${INPUT_ROOT}).
     --out-root DIR  Override output root (default: ${OUTPUT_ROOT}).
     --log-root DIR  Override log root (default: ${LOG_ROOT}).
@@ -50,6 +55,9 @@ while [[ $# -gt 0 ]]; do
         -s) START_DATE="$2"; shift 2 ;;
         -e) END_DATE="$2"; shift 2 ;;
         -f) FORCE=1; shift ;;
+        --csv-only) CSV_ONLY=1; shift ;;
+        --disable-hdf5-locking) DISABLE_HDF5_LOCKING=1; shift ;;
+        --enable-hdf5-locking) DISABLE_HDF5_LOCKING=0; shift ;;
         -p) PARTITION="$2"; shift 2 ;;
         -q) QOS="$2"; shift 2 ;;
         -t) TIME_LIMIT="$2"; shift 2 ;;
@@ -165,7 +173,17 @@ for day_dir in "${day_dirs[@]}"; do
         export_env="${export_env},R_LIBS_USER=${R_LIBS_USER_OVERRIDE}"
     fi
 
-    wrap_cmd="bash -lc 'module load ${MODULE_NAME}; ${R_BIN} \"${R_SCRIPT}\" \"${day}\"'"
+    extra_args=""
+    if [[ $CSV_ONLY -eq 1 ]]; then
+        extra_args=" --csv-only"
+    fi
+    if [[ $DISABLE_HDF5_LOCKING -eq 1 ]]; then
+        extra_args="${extra_args} --disable-hdf5-locking"
+    else
+        extra_args="${extra_args} --enable-hdf5-locking"
+    fi
+
+    wrap_cmd="bash -lc 'module load ${MODULE_NAME}; ${R_BIN} \"${R_SCRIPT}\" \"${day}\" --input-dir \"${day_dir}\"${extra_args}'"
 
     if JOB_STR=$(sbatch \
         --account=ncas_radar \
