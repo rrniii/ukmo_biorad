@@ -22,8 +22,27 @@ volumes. The pipeline:
 This makes the output suitable for ecological/bird migration analysis and
 aligns with bioRad expectations.
 
+## Upstream inputs (CEDA + Nimrod conversion)
+The raw inputs for this repo are aggregated ODIM HDF5 files created by the
+Nimrod conversion workflow in a separate repo:
+- Repo path: `/home/users/rrniii/bin/Nimrod_convert_and_aggregate`
+- Key scripts: `convert_all_files.sh`, `convert_and_aggregate.sh`, `extract.sh`,
+  and `convert_and_aggregate.py`.
+
+That repo:
+- Reads Met Office UKMO Nimrod single-site radar data from the CEDA archive.
+  Dataset: https://catalogue.ceda.ac.uk/uuid/82adec1f896af6169112d09cc1174499/
+- Uses the raw archive on JASMIN (e.g. `/badc/ukmo-nimrod/data/single-site/...`)
+  to extract `.dat.gz.tar` files.
+- Converts and aggregates those raw scans into daily ODIM HDF5 under
+  `raw_h5_data_final/single-site/<radar>/<year>/`.
+
+This repo assumes those aggregated files already exist and are the inputs for
+`submit_biorad_vol2birdinput.sh`. Make sure the base path used by the Nimrod
+conversion repo matches the base path configured here.
+
 ## Directory layout and naming conventions
-Default base: `/gws/pw/j07/woest/ukmo-nimrod`
+Default base: `/work/scratch-pw4/rrniii`
 
 Raw input:
 - `raw_h5_data_final/single-site/<radar>/<year>/<YYYYMMDD>_..._aggregate.h5`
@@ -41,6 +60,11 @@ Logs:
 - `biorad_vp_logs/submit_biorad_vp_submission_<timestamp>/...`
 
 ## Components and how they fit together
+### Upstream: `Nimrod_convert_and_aggregate` (external)
+- Produces the aggregated ODIM HDF5 files consumed by this repo.
+- Run `convert_all_files.sh` there to generate:
+  `raw_h5_data_final/single-site/<radar>/<year>/<YYYYMMDD>_..._aggregate.h5`.
+
 ### `submit_biorad_vol2birdinput.sh`
 - Scans the raw tree for aggregated HDF5 files.
 - For each day, submits a SLURM job that runs `ukmo2bioradinput.py`.
@@ -112,7 +136,7 @@ distinct output files.
 ```
 module load jasr
 Rscript run_biorad_vp_for_date.R 20250122 \
-  --input-file /gws/pw/j07/woest/ukmo-nimrod/vol2birdinput/single-site/castor-bay/2025/20250122/lp/20250122_polar_pl_radar07_aggregate_lp_0440.h5 \
+  --input-file /work/scratch-pw4/rrniii/vol2birdinput/single-site/castor-bay/2025/20250122/lp/20250122_polar_pl_radar07_aggregate_lp_0440.h5 \
   --disable-hdf5-locking
 ```
 

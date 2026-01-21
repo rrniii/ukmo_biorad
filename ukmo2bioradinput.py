@@ -9,7 +9,7 @@ root and attributes preserved.
 
 Output naming: <base>_<pulse>_<time>.h5 where <time> is the child group
 name under the pulse type. By default outputs are written under
-/gws/nopw/j04/ncas_radar_vol2/avocet/ukmo-nimrod/vol2birdinput,
+/work/scratch-pw4/rrniii/vol2birdinput,
 mirroring the raw input tree, then adding a day folder (from the leading
 date in the filename) and a pulse-type folder (lp/sp).
 """
@@ -18,8 +18,8 @@ import h5py
 import os
 import sys
 
-DEFAULT_RAW_ROOT = "/gws/nopw/j04/ncas_radar_vol2/avocet/ukmo-nimrod/raw_h5_data_final"
-DEFAULT_OUT_ROOT = "/gws/nopw/j04/ncas_radar_vol2/avocet/ukmo-nimrod/vol2birdinput"
+DEFAULT_RAW_ROOT = "/work/scratch-pw4/rrniii/raw_h5_data_final"
+DEFAULT_OUT_ROOT = "/work/scratch-pw4/rrniii/vol2birdinput"
 
 
 def copy_group_contents_to_root(src: h5py.File, group_path: str, dst: h5py.File):
