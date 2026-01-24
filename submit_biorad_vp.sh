@@ -7,9 +7,9 @@
 
 set -uo pipefail
 
-INPUT_ROOT="/work/scratch-pw4/rrniii/vol2birdinput"
-OUTPUT_ROOT="/work/scratch-pw4/rrniii/biorad_vp"
-LOG_ROOT="/work/scratch-pw4/rrniii/biorad_vp_logs"
+INPUT_ROOT="/work/scratch-pw5/rrniii/ukmo-nimrod/vol2birdinput"
+OUTPUT_ROOT="/work/scratch-pw5/rrniii/ukmo-nimrod/biorad_vp"
+LOG_ROOT="/work/scratch-pw5/rrniii/ukmo-nimrod/biorad_vp_logs"
 PARTITION="standard"
 QOS="short"
 TIME_LIMIT="01:00:00"

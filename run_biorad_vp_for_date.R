@@ -25,10 +25,10 @@ suppressPackageStartupMessages(library(bioRad))
 # --------- configuration you may want to edit ----------
 # Use environment variables to override defaults without editing this file.
 # Root directory containing vol2bird input files.
-BASE_IN  <- Sys.getenv("RADAR_IN", unset = "/work/scratch-pw4/rrniii/vol2birdinput")
+BASE_IN  <- Sys.getenv("RADAR_IN", unset = "/work/scratch-pw5/rrniii/ukmo-nimrod/vol2birdinput")
 
 # Output root (mirrors the input tree down to the date directory).
-BASE_OUT <- Sys.getenv("RADAR_OUT", unset = "/work/scratch-pw4/rrniii/biorad_vp")
+BASE_OUT <- Sys.getenv("RADAR_OUT", unset = "/work/scratch-pw5/rrniii/ukmo-nimrod/biorad_vp")
 
 # Which input files to consider as PVOL ODIM H5
 INPUT_PATTERN <- Sys.getenv("RADAR_PATTERN", unset = "\\.h5$")
@@ -44,6 +44,13 @@ INPUT_FILE <- ""
 
 # Optional mode to skip HDF5 output (CSV-only).
 SKIP_H5_ENV <- Sys.getenv("SKIP_H5", unset = "0")
+
+# Quality filter (always on): mask DBZH using SQIH only.
+DBZ_PARAM <- "DBZH"
+SQI_PARAM <- "SQIH"
+SQI_THR <- 0.20
+EXTRA_PARAMS <- c("VRADH", "RHOHV", "ZDR", "PHIDP")
+PARAMS_TO_READ <- unique(c(DBZ_PARAM, SQI_PARAM, EXTRA_PARAMS))
 
 # bioRad/vol2bird settings (C-band dual-pol baseline).
 # NOTE: autoconf must be FALSE to allow per-file nyquist_min overrides.
@@ -245,6 +252,38 @@ settings_for_file <- function(path) {
   VP_SETTINGS
 }
 
+# Apply SQIH/CI thresholds to DBZH gates (always).
+apply_quality_filter <- function(pvol, dbz_name, sqi_name, sqi_thr, source_path) {
+  for (i in seq_along(pvol$scans)) {
+    sc <- pvol$scans[[i]]
+    missing <- setdiff(c(dbz_name, sqi_name), names(sc$params))
+    if (length(missing) > 0) {
+      stop("Missing params in ", source_path, ": ", paste(missing, collapse = ", "),
+           call. = FALSE)
+    }
+
+    dbz <- sc$params[[dbz_name]]
+    sqi <- sc$params[[sqi_name]]
+
+    # param objects are matrices with attributes; operate on their numeric values.
+    dbz_vals <- unclass(dbz)
+    sqi_vals <- unclass(sqi)
+    storage.mode(dbz_vals) <- "numeric"
+    storage.mode(sqi_vals) <- "numeric"
+
+    bad <- (sqi_vals < sqi_thr)
+
+    # bioRad uses NA for missing gates in pvol objects.
+    dbz_vals[bad] <- NA_real_
+
+    dbz[] <- dbz_vals
+
+    sc$params[[dbz_name]] <- dbz
+    pvol$scans[[i]] <- sc
+  }
+  pvol
+}
+
 # Wrapper for calculate_vp with dynamic settings list.
 run_vp_write <- function(pvol, vpfile, settings) {
   do.call(calculate_vp, c(list(file = pvol, vpfile = vpfile), settings))
@@ -287,6 +326,7 @@ for (date_dir in sort(date_dirs)) {
   } else {
     cat("Output H5 directory :", out_dir_h5,  "\n\n")
   }
+  cat("Quality filter:", DBZ_PARAM, "with", SQI_PARAM, ">=", SQI_THR, "\n\n")
 
   for (f in sort(files)) {
     # Build output filenames that align with input basenames.
@@ -304,10 +344,13 @@ for (date_dir in sort(date_dirs)) {
     cat("Processing:", f, "\n")
     settings <- settings_for_file(f)
     tryCatch({
+      pvol <- read_pvolfile(f, param = PARAMS_TO_READ)
+      pvol_input <- apply_quality_filter(pvol, DBZ_PARAM, SQI_PARAM,
+                                         SQI_THR, f)
       # Write both VPTS CSV and ODIM HDF5 outputs.
-      run_vp_write(f, out_csv, settings)
+      run_vp_write(pvol_input, out_csv, settings)
       if (!skip_h5) {
-        run_vp_write(f, out_h5,  settings)
+        run_vp_write(pvol_input, out_h5,  settings)
       }
       cat("  OK ->", out_csv, "\n")
       if (skip_h5) {
