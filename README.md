@@ -42,7 +42,7 @@ This repo assumes those aggregated files already exist and are the inputs for
 conversion repo matches the base path configured here.
 
 ## Directory layout and naming conventions
-Default base: `/work/scratch-pw4/rrniii`
+Default base: `/gws/ssde/j25a/ncas_radar/vol2/avocet/ukmo-nimrod`
 
 Raw input:
 - `raw_h5_data_final/single-site/<radar>/<year>/<YYYYMMDD>_..._aggregate.h5`
@@ -136,7 +136,7 @@ distinct output files.
 ```
 module load jasr
 Rscript run_biorad_vp_for_date.R 20250122 \
-  --input-file /work/scratch-pw4/rrniii/vol2birdinput/single-site/castor-bay/2025/20250122/lp/20250122_polar_pl_radar07_aggregate_lp_0440.h5 \
+  --input-file /gws/ssde/j25a/ncas_radar/vol2/avocet/ukmo-nimrod/vol2birdinput/single-site/castor-bay/2025/20250122/lp/20250122_polar_pl_radar07_aggregate_lp_0440.h5 \
   --disable-hdf5-locking
 ```
 

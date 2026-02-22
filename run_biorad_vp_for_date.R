@@ -25,10 +25,10 @@ suppressPackageStartupMessages(library(bioRad))
 # --------- configuration you may want to edit ----------
 # Use environment variables to override defaults without editing this file.
 # Root directory containing vol2bird input files.
-BASE_IN  <- Sys.getenv("RADAR_IN", unset = "/work/scratch-pw5/rrniii/ukmo-nimrod/vol2birdinput")
+BASE_IN  <- Sys.getenv("RADAR_IN", unset = "/gws/ssde/j25a/ncas_radar/vol2/avocet/ukmo-nimrod/vol2birdinput")
 
 # Output root (mirrors the input tree down to the date directory).
-BASE_OUT <- Sys.getenv("RADAR_OUT", unset = "/work/scratch-pw5/rrniii/ukmo-nimrod/biorad_vp")
+BASE_OUT <- Sys.getenv("RADAR_OUT", unset = "/gws/ssde/j25a/ncas_radar/vol2/avocet/ukmo-nimrod/biorad_vp")
 
 # Which input files to consider as PVOL ODIM H5
 INPUT_PATTERN <- Sys.getenv("RADAR_PATTERN", unset = "\\.h5$")
