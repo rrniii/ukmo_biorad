@@ -45,6 +45,9 @@ INPUT_FILE <- ""
 # Optional mode to skip HDF5 output (CSV-only).
 SKIP_H5_ENV <- Sys.getenv("SKIP_H5", unset = "0")
 
+# Optional path to a file/TSV containing input files to exclude.
+EXCLUDE_FILES_ENV <- Sys.getenv("EXCLUDE_FILES_LIST", unset = "")
+
 # Quality filter (always on): mask DBZH using SQIH only.
 DBZ_PARAM <- "DBZH"
 SQI_PARAM <- "SQIH"
@@ -76,10 +79,11 @@ is_true <- function(x) {
 
 # Combine env-based SKIP_H5 with CLI --csv-only.
 skip_h5 <- is_true(SKIP_H5_ENV)
+exclude_files_path <- EXCLUDE_FILES_ENV
 
 # Print CLI usage.
 usage <- function() {
-  cat("Usage: run_biorad_vp_for_date.R <YYYYMMDD> [--input-root PATH] [--input-dir DIR] [--input-file FILE] [--output-root PATH] [--pattern REGEX] [--csv-only] [--disable-hdf5-locking] [--enable-hdf5-locking] [--force]\n")
+  cat("Usage: run_biorad_vp_for_date.R <YYYYMMDD> [--input-root PATH] [--input-dir DIR] [--input-file FILE] [--output-root PATH] [--pattern REGEX] [--exclude-files PATH] [--csv-only] [--disable-hdf5-locking] [--enable-hdf5-locking] [--force]\n")
 }
 
 # Parse CLI args; first positional arg must be the date string.
@@ -117,6 +121,12 @@ while (i <= length(args)) {
   if (opt == "--pattern") {
     if (i == length(args)) stop("--pattern requires a value.", call. = FALSE)
     INPUT_PATTERN <- args[i + 1]
+    i <- i + 2
+    next
+  }
+  if (opt == "--exclude-files") {
+    if (i == length(args)) stop("--exclude-files requires a value.", call. = FALSE)
+    exclude_files_path <- args[i + 1]
     i <- i + 2
     next
   }
@@ -215,6 +225,34 @@ find_date_dir_for_file <- function(path, date_str) {
   ""
 }
 
+# Read an exclusion file list (plain lines or TSV with input_file column).
+load_excluded_files <- function(path) {
+  if (!nzchar(path)) return(character(0))
+  if (!file.exists(path)) {
+    stop("Exclude file list does not exist: ", path, call. = FALSE)
+  }
+
+  df <- tryCatch(
+    read.delim(path, sep = "\t", stringsAsFactors = FALSE, quote = "", comment.char = ""),
+    error = function(e) NULL
+  )
+
+  vals <- character(0)
+  if (!is.null(df) && ncol(df) >= 1) {
+    if ("input_file" %in% names(df)) {
+      vals <- df$input_file
+    } else {
+      vals <- df[[1]]
+    }
+  } else {
+    vals <- readLines(path, warn = FALSE)
+  }
+
+  vals <- trimws(as.character(vals))
+  vals <- vals[nzchar(vals)]
+  unique(normalizePath(vals, winslash = "/", mustWork = FALSE))
+}
+
 # Find matching date directories; this allows nested radar/year/date layouts.
 if (nzchar(INPUT_FILE)) {
   date_dir <- find_date_dir_for_file(INPUT_FILE, date_str)
@@ -233,6 +271,13 @@ if (nzchar(INPUT_FILE)) {
 }
 if (length(date_dirs) == 0) {
   stop("No date directories found under input root for date: ", date_str, call. = FALSE)
+}
+
+excluded_files <- load_excluded_files(exclude_files_path)
+excluded_set <- NULL
+if (length(excluded_files) > 0) {
+  excluded_set <- setNames(rep(TRUE, length(excluded_files)), excluded_files)
+  cat("Loaded excluded files:", length(excluded_files), "\n")
 }
 
 # Determine pulse type from filename/path to support per-pulse settings.
@@ -293,6 +338,7 @@ run_vp_write <- function(pvol, vpfile, settings) {
 total_ok <- 0L
 total_fail <- 0L
 total_skip <- 0L
+total_excluded <- 0L
 
 # Process each matching date directory.
 for (date_dir in sort(date_dirs)) {
@@ -329,6 +375,14 @@ for (date_dir in sort(date_dirs)) {
   cat("Quality filter:", DBZ_PARAM, "with", SQI_PARAM, ">=", SQI_THR, "\n\n")
 
   for (f in sort(files)) {
+    f_norm <- normalizePath(f, winslash = "/", mustWork = FALSE)
+    if (!is.null(excluded_set) && isTRUE(excluded_set[[f_norm]])) {
+      cat("Skipping (excluded):", f, "\n")
+      total_skip <- total_skip + 1L
+      total_excluded <- total_excluded + 1L
+      next
+    }
+
     # Build output filenames that align with input basenames.
     base <- tools::file_path_sans_ext(basename(f))
     out_csv <- file.path(out_dir_csv, paste0(base, "_vp.csv"))
@@ -361,11 +415,14 @@ for (date_dir in sort(date_dirs)) {
       total_ok <- total_ok + 1L
     }, error = function(e) {
       cat("  FAILED:", conditionMessage(e), "\n\n")
-      total_fail <- total_fail + 1L
+      # Use super-assignment so failures counted inside callback are visible
+      # to final summary/exit status.
+      total_fail <<- total_fail + 1L
     })
   }
 }
 
 # Final summary and non-zero exit when any failures occurred.
+cat("Excluded:", total_excluded, "\n")
 cat("Done. Success:", total_ok, " Skipped:", total_skip, " Failed:", total_fail, "\n")
 if (total_fail > 0) quit(status = 2)
