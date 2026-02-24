@@ -5,7 +5,7 @@
 # job per file/day to run ukmo2bioradinput.py. Before submitting, the script
 # checks whether all expected outputs already exist (lp/sp pulse types, all
 # time child groups). If everything is present and --force is not set, the day
-# is skipped. Jobs use the standard partition, short QoS, and a 30-minute
+# is skipped. Jobs use the standard partition, standard QoS, and a 30-minute
 # time limit by default. Scan failures skip submission and are logged.
 
 set -uo pipefail
@@ -16,7 +16,7 @@ LOG_ROOT="/gws/ssde/j25a/ncas_radar/vol2/avocet/ukmo-nimrod/vol2birdinput_logs"
 # Default to the nimrod env that has h5py; can override with --python
 PYTHON_BIN="/gws/smf/j04/ncas_radar/software/miniconda3_radar_group_20200519/envs/nimrod/bin/python"
 PARTITION="standard"
-QOS="short"
+QOS="standard"
 TIME_LIMIT="00:30:00"
 START_DATE="00000000"  # inclusive YYYYMMDD
 END_DATE="99999999"    # inclusive YYYYMMDD

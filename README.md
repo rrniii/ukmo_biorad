@@ -8,7 +8,9 @@ This repo provides a two-stage pipeline:
 2) Run bioRad/vol2bird on those ODIM H5 files to produce VP outputs (CSV + H5).
 
 The scripts are designed for JASMIN, use SLURM, and default to a shared GWS
-directory tree.
+directory tree. By default, submit scripts use:
+- `--partition=standard`
+- `--qos=standard`
 
 ## High-level overview: what the pipeline does and why
 UKMO aggregated HDF5 files bundle many scans and time groups into a single
@@ -58,6 +60,8 @@ VP outputs:
 Logs:
 - `vol2birdinput_logs/submit_biorad_vol2birdinput_submission_<timestamp>/...`
 - `biorad_vp_logs/submit_biorad_vp_submission_<timestamp>/...`
+- `biorad_vpts_logs/submit_biorad_vpts_submission_<timestamp>/...`
+- `biorad_vits_logs/submit_biorad_vits_submission_<timestamp>/...`
 
 ## Components and how they fit together
 ### Upstream: `Nimrod_convert_and_aggregate` (external)
@@ -95,9 +99,27 @@ Logs:
 - Supports debug modes:
   - `--input-dir /path/to/YYYYMMDD`
   - `--input-file /path/to/file.h5`
+- Supports excluding known bad inputs:
+  - `--exclude-files /path/to/list_or_tsv`
+  - or environment variable `EXCLUDE_FILES_LIST=/path/to/list_or_tsv`
 - Per-file tuning:
   - `nyquist_min = 1` for `lp` files.
   - `sp` files use bioRad defaults.
+
+### `submit_biorad_vpts.sh` and `run_biorad_vpts_for_date.R`
+- Build daily VPTS outputs from VP CSV files.
+- Creates per-day files by radar/pulse under `biorad_vpts`.
+
+### `submit_biorad_vits.sh` and `run_biorad_vits_for_date.R`
+- Build daily VITS outputs from VPTS daily files.
+- Supports altitude band controls (`--alt-min`, `--alt-max`).
+
+### Rerun / failed-input tooling
+- `submit_biorad_vp_rerun_from_tsv.sh`:
+  - Re-submit failed/incomplete day-level VP runs from a TSV list.
+- `submit_biorad_vp_rerun_failed_files.sh`:
+  - Re-submit file-level failed targets from a TSV list.
+  - Supports exclude manifests with `--exclude-tsv`.
 
 ## HDF5 file locking (important)
 On GWS, HDF5 file locking can hang and stall processes in uninterruptible I/O
@@ -127,6 +149,16 @@ distinct output files.
 ./submit_biorad_vp.sh -s 20250101 -e 20250131 --disable-hdf5-locking
 ```
 
+### Step 3: Build VPTS daily products
+```
+./submit_biorad_vpts.sh -s 20250101 -e 20250131
+```
+
+### Step 4: Build VITS daily products
+```
+./submit_biorad_vits.sh -s 20250101 -e 20250131 --alt-min 200 --alt-max 4000
+```
+
 ### Example: single radar/day
 ```
 ./submit_biorad_vp.sh -r castor-bay -s 20250122 -e 20250122 --disable-hdf5-locking
@@ -143,6 +175,24 @@ Rscript run_biorad_vp_for_date.R 20250122 \
 ### CSV-only mode (skip VP H5)
 ```
 ./submit_biorad_vp.sh -s 20250122 -e 20250122 --csv-only
+```
+
+### Retry failed file-level VP targets
+```
+./submit_biorad_vp_rerun_failed_files.sh \
+  --rerun-tsv /path/to/rerun_retryable_files.tsv \
+  --exclude-tsv /path/to/exclude_bad_files.tsv \
+  -t 02:00:00
+```
+
+### Run per-radar submission in detached `screen`
+```
+screen -dmS vpts_castor_bay bash -lc './submit_biorad_vpts.sh -r castor-bay'
+```
+
+### Monitor active `screen` sessions
+```
+watch -n 5 "date; echo '--- screen sessions ---'; screen -ls"
 ```
 
 ## Outputs and file contents
@@ -163,3 +213,7 @@ Rscript run_biorad_vp_for_date.R 20250122 \
 - `ukmo2bioradinput.py`: stage 1 converter.
 - `submit_biorad_vp.sh`: stage 2 submission script.
 - `run_biorad_vp_for_date.R`: stage 2 runner.
+- `submit_biorad_vp_rerun_from_tsv.sh`: day-level VP rerun helper.
+- `submit_biorad_vp_rerun_failed_files.sh`: file-level VP rerun helper.
+- `submit_biorad_vpts.sh` / `run_biorad_vpts_for_date.R`: VP to VPTS daily aggregation.
+- `submit_biorad_vits.sh` / `run_biorad_vits_for_date.R`: VPTS to VITS daily integration.

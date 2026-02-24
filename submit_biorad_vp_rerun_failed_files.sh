@@ -10,7 +10,7 @@ INPUT_ROOT="/gws/ssde/j25a/ncas_radar/vol2/avocet/ukmo-nimrod/vol2birdinput"
 OUTPUT_ROOT="/gws/ssde/j25a/ncas_radar/vol2/avocet/ukmo-nimrod/biorad_vp"
 LOG_ROOT="/gws/ssde/j25a/ncas_radar/vol2/avocet/ukmo-nimrod/biorad_vp_logs"
 PARTITION="standard"
-QOS="short"
+QOS="standard"
 TIME_LIMIT="02:00:00"
 ARRAY_MAX=200
 MODULE_NAME="jasr"
@@ -220,4 +220,3 @@ else
     echo "Failed to submit retry array job." | tee -a "$RUN_LOG" >&2
     exit 1
 fi
-
