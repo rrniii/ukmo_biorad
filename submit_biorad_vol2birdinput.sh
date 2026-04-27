@@ -5,8 +5,10 @@
 # job per file/day to run ukmo2bioradinput.py. Before submitting, the script
 # checks whether all expected outputs already exist (lp/sp pulse types, all
 # time child groups). If everything is present and --force is not set, the day
-# is skipped. Jobs use the standard partition, standard QoS, and a 30-minute
-# time limit by default. Scan failures skip submission and are logged.
+# is skipped. With --update-stale, files are also submitted when any expected
+# output is older than the aggregated input. Jobs use the standard partition,
+# standard QoS, and a 30-minute time limit by default. Scan failures skip
+# submission and are logged.
 
 set -uo pipefail
 
@@ -22,6 +24,7 @@ START_DATE="00000000"  # inclusive YYYYMMDD
 END_DATE="99999999"    # inclusive YYYYMMDD
 RADAR_FILTER=""        # if set, only process this radar name (matches directory)
 FORCE=0                # 1 => overwrite/submit even if outputs exist
+UPDATE_STALE=0         # 1 => submit when outputs are older than input
 
 usage() {
     cat <<EOF
@@ -31,6 +34,7 @@ Usage: $(basename "$0") [options]
     -s START_DATE   Inclusive start date YYYYMMDD (default: all).
     -e END_DATE     Inclusive end date YYYYMMDD (default: all).
     -f              Force submit even if outputs exist.
+    --update-stale  Submit only if outputs are missing or older than the input.
     -p PARTITION    SLURM partition (default: ${PARTITION}).
     -q QOS          SLURM QoS (default: ${QOS}).
     -t TIME         SLURM time limit (default: ${TIME_LIMIT}).
@@ -51,6 +55,7 @@ while [[ $# -gt 0 ]]; do
         -s) START_DATE="$2"; shift 2 ;;
         -e) END_DATE="$2"; shift 2 ;;
         -f) FORCE=1; shift ;;
+        --update-stale) UPDATE_STALE=1; shift ;;
         -p) PARTITION="$2"; shift 2 ;;
         -q) QOS="$2"; shift 2 ;;
         -t) TIME_LIMIT="$2"; shift 2 ;;
@@ -161,15 +166,38 @@ PY
         fi
         mapfile -t expected_outs <<< "$scan_out"
 
+        expected_count=0
         missing=()
+        stale=()
         for o in "${expected_outs[@]}"; do
-            [[ -f "$o" ]] || missing+=("$o")
+            [[ -n "$o" ]] || continue
+            ((expected_count++))
+            if [[ ! -f "$o" ]]; then
+                missing+=("$o")
+            elif [[ $UPDATE_STALE -eq 1 && "$o" -ot "$infile" ]]; then
+                stale+=("$o")
+            fi
         done
 
-        if [[ ${#expected_outs[@]} -gt 0 && ${#missing[@]} -eq 0 && $FORCE -eq 0 ]]; then
-            echo "Skip (all outputs present): $infile"
+        if [[ $expected_count -eq 0 ]]; then
+            echo "Skip (no lp/sp groups found): $infile" | tee -a "$RUN_LOG"
             ((total_skipped++))
             continue
+        fi
+
+        if [[ $expected_count -gt 0 && ${#missing[@]} -eq 0 && ${#stale[@]} -eq 0 && $FORCE -eq 0 ]]; then
+            if [[ $UPDATE_STALE -eq 1 ]]; then
+                echo "Skip (outputs present and current): $infile"
+            else
+                echo "Skip (all outputs present): $infile"
+            fi
+            ((total_skipped++))
+            continue
+        fi
+
+        submit_reason="missing outputs: ${#missing[@]}, stale outputs: ${#stale[@]}"
+        if [[ $FORCE -eq 1 ]]; then
+            submit_reason="force"
         fi
 
         # Prepare log paths
@@ -188,7 +216,7 @@ PY
             --job-name="${job_name}" \
             --wrap="\"${PYTHON_BIN}\" \"${CONVERTER}\" -i \"${infile}\" --raw-root \"${RAW_ROOT}\" --output-root \"${OUTPUT_ROOT}\""); then
             JOB_ID=$(echo "$JOB_STR" | grep -o '[0-9][0-9]*' | tail -n1)
-            echo "Submitted: ${infile} -> job ${JOB_ID}" | tee -a "$RUN_LOG"
+            echo "Submitted (${submit_reason}): ${infile} -> job ${JOB_ID}" | tee -a "$RUN_LOG"
             ((total_submitted++))
         else
             echo "Failed to submit job for ${infile}" | tee -a "$RUN_LOG" >&2
