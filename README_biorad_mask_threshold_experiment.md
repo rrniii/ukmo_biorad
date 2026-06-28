@@ -93,6 +93,28 @@ python summarise_biorad_mask_experiment.py --run-id <run_id>
 
 Reports are written under `<run_dir>/reports/`.
 
+## Current Evidence Result
+
+The current production recommendation is documented in:
+
+`/gws/ssde/j25a/ncas_radar/vol2/avocet/experiments/biorad_mask_threshold_scan/reports/production_masking_recommendation_20260628.md`
+
+The primary evidence run is:
+
+`/gws/ssde/j25a/ncas_radar/vol2/avocet/experiments/biorad_mask_threshold_scan/runs/evidence_hourly_20260628T1535Z`
+
+That run used `bioRad 0.12.0` and `vol2birdR 1.3.0`, processed 40 pvol
+inputs across 5 profiles, and completed 200/200 VP calculations successfully.
+
+Recommended first production profile:
+
+`combined_sqi025_ncp025_floor005_3db_clutter5_1_035`
+
+Reason: it is the strongest tested combined noise+clutter mask that did not
+collapse the source-supported late-April migration cases. The stricter `sqi030`
+and `sqi035` profiles should remain diagnostic/stress-test profiles for now,
+not defaults.
+
 ## Decision Rule
 
 Do not automatically choose a threshold from a single score. Inspect:
