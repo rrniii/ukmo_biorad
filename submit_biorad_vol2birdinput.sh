@@ -7,7 +7,7 @@
 # time child groups). If everything is present and --force is not set, the day
 # is skipped. With --update-stale, files are also submitted when any expected
 # output is older than the aggregated input. Jobs use the standard partition,
-# standard QoS, and a 30-minute time limit by default. Scan failures skip
+# standard QoS, and a 2-hour time limit by default. Scan failures skip
 # submission and are logged.
 
 set -uo pipefail
@@ -19,12 +19,14 @@ LOG_ROOT="/gws/ssde/j25a/ncas_radar/vol2/avocet/ukmo-nimrod/vol2birdinput_logs"
 PYTHON_BIN="/gws/smf/j04/ncas_radar/software/miniconda3_radar_group_20200519/envs/nimrod/bin/python"
 PARTITION="standard"
 QOS="standard"
-TIME_LIMIT="00:30:00"
+TIME_LIMIT="${TIME_LIMIT:-02:00:00}"
 START_DATE="00000000"  # inclusive YYYYMMDD
 END_DATE="99999999"    # inclusive YYYYMMDD
 RADAR_FILTER=""        # if set, only process this radar name (matches directory)
 FORCE=0                # 1 => overwrite/submit even if outputs exist
 UPDATE_STALE=0         # 1 => submit when outputs are older than input
+MAX_ACTIVE="${MAX_ACTIVE:-3800}"
+SLEEP_SECONDS="${SLEEP_SECONDS:-60}"
 
 usage() {
     cat <<EOF
@@ -42,6 +44,9 @@ Usage: $(basename "$0") [options]
     --raw-root DIR  Override raw root (default: ${RAW_ROOT}).
     --out-root DIR  Override output root (default: ${OUTPUT_ROOT}).
     --log-root DIR  Override log root (default: ${LOG_ROOT}).
+    --max-active N  Maximum active biorad_* Slurm jobs before waiting (default: ${MAX_ACTIVE}).
+    --sleep-seconds N
+                    Seconds to sleep while waiting for active jobs to drain (default: ${SLEEP_SECONDS}).
     -h              Show this help.
 EOF
 }
@@ -63,10 +68,21 @@ while [[ $# -gt 0 ]]; do
         --raw-root) RAW_ROOT="$2"; shift 2 ;;
         --out-root) OUTPUT_ROOT="$2"; shift 2 ;;
         --log-root) LOG_ROOT="$2"; shift 2 ;;
+        --max-active) MAX_ACTIVE="$2"; shift 2 ;;
+        --sleep-seconds) SLEEP_SECONDS="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
     esac
 done
+
+if ! [[ "$MAX_ACTIVE" =~ ^[0-9]+$ ]] || [[ "$MAX_ACTIVE" -lt 1 ]]; then
+    echo "MAX_ACTIVE must be a positive integer; got '${MAX_ACTIVE}'" >&2
+    exit 1
+fi
+if ! [[ "$SLEEP_SECONDS" =~ ^[0-9]+$ ]] || [[ "$SLEEP_SECONDS" -lt 1 ]]; then
+    echo "SLEEP_SECONDS must be a positive integer; got '${SLEEP_SECONDS}'" >&2
+    exit 1
+fi
 
 # Validate dates
 for d in "$START_DATE" "$END_DATE"; do
@@ -90,6 +106,8 @@ RUN_LOG="${RUN_DIR}/submit_biorad_vol2birdinput_submission_${RUN_TS}.log"
 {
     echo "Started: $(date +"%Y-%m-%d %H:%M:%S %Z")"
     echo "Command: ${ORIG_CMD}"
+    echo "MAX_ACTIVE=${MAX_ACTIVE}"
+    echo "SLEEP_SECONDS=${SLEEP_SECONDS}"
 } >> "$RUN_LOG"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -117,6 +135,17 @@ fi
 
 total_submitted=0
 total_skipped=0
+
+active_biorad_jobs() {
+    squeue -u "$USER" -h -o "%j" | awk '
+        $1 ~ /^biorad_/ {
+            total++
+        }
+        END {
+            print total + 0
+        }
+    '
+}
 
 for radar in "${RADARS[@]}"; do
     radar_dir="${INPUT_BASE}/${radar}"
@@ -204,6 +233,11 @@ PY
         log_dir="${SLURM_ROOT}/${radar}/${day}"
         mkdir -p "$log_dir"
         job_name="biorad_${radar}_${day}"
+
+        while [[ "$(active_biorad_jobs)" -ge "$MAX_ACTIVE" ]]; do
+            echo "Wait: active_biorad_jobs=$(active_biorad_jobs) max_active=${MAX_ACTIVE}" | tee -a "$RUN_LOG"
+            sleep "$SLEEP_SECONDS"
+        done
 
         # Submit SLURM job to run the converter
         if JOB_STR=$(sbatch \
