@@ -24,6 +24,24 @@ DEFAULT_OUT_ROOT = "/gws/ssde/j25a/ncas_radar/vol2/avocet/ukmo-nimrod/vol2birdin
 DATASET_RE = re.compile(r"^dataset[0-9]+$")
 
 
+def remove_stale_outputs(output_dir: str, prefix: str, expected_names: set[str]):
+    """
+    Remove output files for this aggregate that are no longer expected.
+    This is intentionally prefix-scoped so unrelated dates or radars are untouched.
+    """
+    if not os.path.isdir(output_dir):
+        return
+    for existing_name in os.listdir(output_dir):
+        if (
+            existing_name.startswith(prefix)
+            and existing_name.endswith(".h5")
+            and existing_name not in expected_names
+        ):
+            path = os.path.join(output_dir, existing_name)
+            os.unlink(path)
+            print(f"Removed stale pvol output: {path}", file=sys.stderr)
+
+
 def copy_group_contents_to_root(src: h5py.File, group_path: str, dst: h5py.File):
     """
     Copy everything under group_path into dst root, preserving attributes.
@@ -44,20 +62,13 @@ def process_pulse_type(src: h5py.File, pulse: str, base_name: str, output_dir: s
     Process one pulse-type group (lp/sp), emitting one file per time group.
     Child keys are assumed to be time codes (e.g., 1700).
     """
+    prefix = f"{base_name}_{pulse}_"
     if pulse not in src:
+        remove_stale_outputs(output_dir, prefix, set())
         return []
     child_keys = sorted(src[pulse].keys())
     expected_names = {f"{base_name}_{pulse}_{key}.h5" for key in child_keys}
-    if os.path.isdir(output_dir):
-        prefix = f"{base_name}_{pulse}_"
-        for existing_name in os.listdir(output_dir):
-            if (
-                existing_name.startswith(prefix)
-                and existing_name.endswith(".h5")
-                and existing_name not in expected_names
-            ):
-                os.unlink(os.path.join(output_dir, existing_name))
-                print(f"Removed stale pvol output: {os.path.join(output_dir, existing_name)}", file=sys.stderr)
+    remove_stale_outputs(output_dir, prefix, expected_names)
     outputs = []
     for key in child_keys:
         group_path = f"{pulse}/{key}"

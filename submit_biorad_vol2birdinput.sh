@@ -178,11 +178,17 @@ outs = []
 try:
     with h5py.File(abs_in, "r") as f:
         for pulse in ("lp", "sp"):
+            pulse_dir = os.path.join(out_base, pulse)
+            prefix = f"{base}_{pulse}_"
             if pulse not in f:
+                if os.path.isdir(pulse_dir):
+                    for existing_name in os.listdir(pulse_dir):
+                        if existing_name.startswith(prefix) and existing_name.endswith(".h5"):
+                            outs.append(f"STALE_INVALID\t{os.path.join(pulse_dir, existing_name)}")
                 continue
             for key in f[pulse].keys():
                 group = f[f"{pulse}/{key}"]
-                out_path = os.path.join(out_base, pulse, f"{base}_{pulse}_{key}.h5")
+                out_path = os.path.join(pulse_dir, f"{base}_{pulse}_{key}.h5")
                 if "dataset1" in group and any(dataset_re.match(name) for name in group.keys()):
                     outs.append(out_path)
                 elif os.path.exists(out_path):
