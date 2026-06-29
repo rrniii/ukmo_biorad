@@ -135,6 +135,8 @@ fi
 
 total_submitted=0
 total_skipped=0
+START_YEAR="${START_DATE:0:4}"
+END_YEAR="${END_DATE:0:4}"
 
 active_biorad_jobs() {
     squeue -u "$USER" -h -o "%j" | awk '
@@ -150,7 +152,17 @@ active_biorad_jobs() {
 for radar in "${RADARS[@]}"; do
     radar_dir="${INPUT_BASE}/${radar}"
     [[ -d "$radar_dir" ]] || continue
-    mapfile -t files < <(find "$radar_dir" -mindepth 2 -maxdepth 2 -type f -name "*_aggregate.h5" | sort)
+    mapfile -t files < <(
+        find "$radar_dir" -mindepth 1 -maxdepth 1 -type d -printf "%f\t%p\n" |
+            awk -F '\t' -v start_year="$START_YEAR" -v end_year="$END_YEAR" '
+                length($1) == 4 && $1 ~ /^[0-9]+$/ && $1 >= start_year && $1 <= end_year { print $2 }
+            ' |
+            sort |
+            while IFS= read -r year_dir; do
+                find "$year_dir" -maxdepth 1 -type f -name "*_aggregate.h5"
+            done |
+            sort
+    )
     for infile in "${files[@]}"; do
         day=$(basename "$infile" | cut -d'_' -f1)
         if [[ "$day" < "$START_DATE" || "$day" > "$END_DATE" ]]; then
