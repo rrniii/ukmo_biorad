@@ -52,6 +52,7 @@ NCP_CANDIDATES <- strsplit(Sys.getenv(
   unset = "NCPH,NCP,NCPV,NCPW,normalized_coherent_power,normalised_coherent_power,NORMALISED_COHERENT_POWER"
 ), ",")[[1]]
 VRAD_CANDIDATES <- strsplit(Sys.getenv("VRAD_PARAMS", unset = "VRADH,VRAD,VH"), ",")[[1]]
+CI_CANDIDATES <- strsplit(Sys.getenv("CI_PARAMS", unset = "CI"), ",")[[1]]
 
 VP_SETTINGS <- list(
   autoconf = FALSE,
@@ -237,6 +238,11 @@ int_col <- function(name, default = 0L) {
   if (!(name %in% names(profile))) return(default)
   as_int_or(profile[[name]][[1]], default)
 }
+str_col <- function(name, default = "") {
+  if (!(name %in% names(profile))) return(default)
+  val <- trimws(as.character(profile[[name]][[1]]))
+  if (is.na(val) || !nzchar(val)) default else val
+}
 
 sqi_thr <- num_col("sqi_thr", 0.20)
 ncp_thr <- num_col("ncp_thr", NA_real_)
@@ -246,6 +252,12 @@ clutter_dbz_min <- num_col("clutter_dbz_min", NA_real_)
 clutter_vrad_abs_max <- num_col("clutter_vrad_abs_max", NA_real_)
 clutter_persistence_min <- num_col("clutter_persistence_min", 0)
 clutter_min_gates <- int_col("clutter_min_gates", 1L)
+ci_thr <- num_col("ci_thr", NA_real_)
+ci_bad_when <- tolower(str_col("ci_bad_when", "ge"))
+valid_ci_bad_when <- c("ge", "gt", "le", "lt")
+if (!(ci_bad_when %in% valid_ci_bad_when)) {
+  stop("ci_bad_when must be one of: ", paste(valid_ci_bad_when, collapse = ", "), call. = FALSE)
+}
 
 if (tolower(READ_PARAMS_ENV) == "all") {
   PARAMS_TO_READ <- "all"
@@ -378,11 +390,13 @@ apply_mask_profile <- function(pvol, source_path) {
     sqi_name <- find_param_name(sc, SQI_CANDIDATES)
     ncp_name <- find_param_name(sc, NCP_CANDIDATES)
     vrad_name <- find_param_name(sc, VRAD_CANDIDATES)
+    ci_name <- find_param_name(sc, CI_CANDIDATES)
 
     sqi_bad <- matrix(FALSE, nrow = dims[1], ncol = dims[2])
     ncp_bad <- matrix(FALSE, nrow = dims[1], ncol = dims[2])
     floor_bad <- matrix(FALSE, nrow = dims[1], ncol = dims[2])
     clutter_bad <- matrix(FALSE, nrow = dims[1], ncol = dims[2])
+    ci_bad <- matrix(FALSE, nrow = dims[1], ncol = dims[2])
 
     if (nzchar(sqi_name) && is.finite(sqi_thr)) {
       sqi_vals <- param_values(sc$params[[sqi_name]])
@@ -395,6 +409,20 @@ apply_mask_profile <- function(pvol, source_path) {
       ncp_vals <- param_values(sc$params[[ncp_name]])
       if (identical(dim(ncp_vals), dims)) {
         ncp_bad <- is.finite(ncp_vals) & ncp_vals < ncp_thr
+      }
+    }
+
+    if (nzchar(ci_name) && is.finite(ci_thr)) {
+      ci_vals <- param_values(sc$params[[ci_name]])
+      if (identical(dim(ci_vals), dims)) {
+        ci_finite <- is.finite(ci_vals)
+        ci_bad <- switch(
+          ci_bad_when,
+          ge = ci_finite & ci_vals >= ci_thr,
+          gt = ci_finite & ci_vals > ci_thr,
+          le = ci_finite & ci_vals <= ci_thr,
+          lt = ci_finite & ci_vals < ci_thr
+        )
       }
     }
 
@@ -426,6 +454,7 @@ apply_mask_profile <- function(pvol, source_path) {
     }
 
     noise_bad <- sqi_bad | ncp_bad | floor_bad
+    clutter_component_bad <- clutter_bad | ci_bad
     if (mask_mode == "baseline") {
       combined_bad <- sqi_bad
       if (any(combined_bad, na.rm = TRUE)) {
@@ -437,9 +466,9 @@ apply_mask_profile <- function(pvol, source_path) {
       if (mask_mode == "noise_only") {
         combined_bad <- noise_bad
       } else if (mask_mode == "clutter_only") {
-        combined_bad <- clutter_bad
+        combined_bad <- clutter_component_bad
       } else {
-        combined_bad <- noise_bad | clutter_bad
+        combined_bad <- noise_bad | clutter_component_bad
       }
 
       masked_param_count <- 0L
@@ -464,11 +493,15 @@ apply_mask_profile <- function(pvol, source_path) {
       sqi_param = sqi_name,
       ncp_param = ncp_name,
       vrad_param = vrad_name,
+      ci_param = ci_name,
+      ci_thr = ci_thr,
+      ci_bad_when = ci_bad_when,
       gates_total = as.integer(prod(dims)),
       sqi_bad = safe_sum(sqi_bad),
       ncp_bad = safe_sum(ncp_bad),
       floor_bad = safe_sum(floor_bad),
       clutter_bad = safe_sum(clutter_bad),
+      ci_bad = safe_sum(ci_bad),
       combined_bad = safe_sum(combined_bad),
       masked_param_count = as.integer(masked_param_count),
       stringsAsFactors = FALSE
@@ -495,6 +528,27 @@ append_diag <- function(diag_file, rows) {
 
 run_vp_write <- function(pvol, vpfile, settings) {
   do.call(calculate_vp, c(list(file = pvol, vpfile = vpfile), settings))
+}
+
+cleanup_stale_vp_outputs <- function(files, out_dir_csv, out_dir_h5, skip_h5) {
+  expected_csv <- paste0(tools::file_path_sans_ext(basename(files)), "_vp.csv")
+  if (dir.exists(out_dir_csv)) {
+    existing_csv <- list.files(out_dir_csv, pattern = "_vp\\.csv$", full.names = FALSE)
+    stale_csv <- setdiff(existing_csv, expected_csv)
+    if (length(stale_csv) > 0) {
+      removed <- file.remove(file.path(out_dir_csv, stale_csv))
+      cat("Removed stale VP CSV:", sum(removed), "\n")
+    }
+  }
+  if (!skip_h5 && dir.exists(out_dir_h5)) {
+    expected_h5 <- paste0(tools::file_path_sans_ext(basename(files)), "_vp.h5")
+    existing_h5 <- list.files(out_dir_h5, pattern = "_vp\\.h5$", full.names = FALSE)
+    stale_h5 <- setdiff(existing_h5, expected_h5)
+    if (length(stale_h5) > 0) {
+      removed <- file.remove(file.path(out_dir_h5, stale_h5))
+      cat("Removed stale VP H5:", sum(removed), "\n")
+    }
+  }
 }
 
 if (nzchar(INPUT_FILE)) {
@@ -546,6 +600,7 @@ for (date_dir in sort(date_dirs)) {
   diag_file <- file.path(DIAGNOSTICS_ROOT, rel_day, paste0(PROFILE_ID, "_mask_diagnostics.tsv"))
   dir.create(out_dir_csv, recursive = TRUE, showWarnings = FALSE)
   if (!skip_h5) dir.create(out_dir_h5, recursive = TRUE, showWarnings = FALSE)
+  cleanup_stale_vp_outputs(files, out_dir_csv, out_dir_h5, skip_h5)
 
   cat("Date:", date_str, "\n")
   cat("Input directory:", date_dir, "\n")
