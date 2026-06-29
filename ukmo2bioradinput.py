@@ -17,9 +17,11 @@ import argparse
 import h5py
 import os
 import sys
+import re
 
 DEFAULT_RAW_ROOT = "/gws/ssde/j25a/ncas_radar/vol2/avocet/ukmo-nimrod/raw_h5_data_final"
 DEFAULT_OUT_ROOT = "/gws/ssde/j25a/ncas_radar/vol2/avocet/ukmo-nimrod/vol2birdinput"
+DATASET_RE = re.compile(r"^dataset[0-9]+$")
 
 
 def copy_group_contents_to_root(src: h5py.File, group_path: str, dst: h5py.File):
@@ -51,6 +53,15 @@ def process_pulse_type(src: h5py.File, pulse: str, base_name: str, output_dir: s
         out_name = f"{base_name}_{pulse}_{key}.h5"
         out_path = os.path.join(output_dir, out_name)
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        group = src[group_path]
+        if "dataset1" not in group or not any(DATASET_RE.match(name) for name in group.keys()):
+            if os.path.exists(out_path):
+                os.unlink(out_path)
+            print(
+                f"Skipped invalid pvol group without dataset1: {group_path}",
+                file=sys.stderr,
+            )
+            continue
         tmp_path = os.path.join(
             os.path.dirname(out_path),
             f".{os.path.basename(out_path)}.{os.getpid()}.tmp",
