@@ -160,12 +160,13 @@ for radar in "${RADARS[@]}"; do
         # Compute expected outputs by inspecting the pulse/time groups in the input file
         scan_out=""
         scan_out=$("$PYTHON_BIN" - "$infile" "$OUTPUT_ROOT" "$RAW_ROOT" 2>>"$RUN_LOG" <<'PY'
-import h5py, os, sys, traceback
+import h5py, os, re, sys, traceback
 in_path, out_root, raw_root = sys.argv[1:4]
 abs_in = os.path.abspath(in_path)
 abs_raw = os.path.abspath(raw_root)
 base = os.path.splitext(os.path.basename(abs_in))[0]
 day = base.split("_")[0]
+dataset_re = re.compile(r"^dataset[0-9]+$")
 try:
     rel_parent = os.path.relpath(os.path.dirname(abs_in), abs_raw)
     if rel_parent.startswith(".."):
@@ -180,7 +181,12 @@ try:
             if pulse not in f:
                 continue
             for key in f[pulse].keys():
-                outs.append(os.path.join(out_base, pulse, f"{base}_{pulse}_{key}.h5"))
+                group = f[f"{pulse}/{key}"]
+                out_path = os.path.join(out_base, pulse, f"{base}_{pulse}_{key}.h5")
+                if "dataset1" in group and any(dataset_re.match(name) for name in group.keys()):
+                    outs.append(out_path)
+                elif os.path.exists(out_path):
+                    outs.append(f"STALE_INVALID\t{out_path}")
     print("\n".join(outs))
 except Exception as e:
     sys.stderr.write(f"SCAN_FAILED {abs_in}: {e}\n")
@@ -193,7 +199,16 @@ PY
             ((total_skipped++))
             continue
         fi
-        mapfile -t expected_outs <<< "$scan_out"
+        expected_outs=()
+        stale_invalid=()
+        while IFS= read -r scan_line; do
+            [[ -n "$scan_line" ]] || continue
+            if [[ "$scan_line" == STALE_INVALID$'\t'* ]]; then
+                stale_invalid+=("${scan_line#*$'\t'}")
+            else
+                expected_outs+=("$scan_line")
+            fi
+        done <<< "$scan_out"
 
         expected_count=0
         missing=()
@@ -214,7 +229,7 @@ PY
             continue
         fi
 
-        if [[ $expected_count -gt 0 && ${#missing[@]} -eq 0 && ${#stale[@]} -eq 0 && $FORCE -eq 0 ]]; then
+        if [[ $expected_count -gt 0 && ${#missing[@]} -eq 0 && ${#stale[@]} -eq 0 && ${#stale_invalid[@]} -eq 0 && $FORCE -eq 0 ]]; then
             if [[ $UPDATE_STALE -eq 1 ]]; then
                 echo "Skip (outputs present and current): $infile"
             else
@@ -224,7 +239,7 @@ PY
             continue
         fi
 
-        submit_reason="missing outputs: ${#missing[@]}, stale outputs: ${#stale[@]}"
+        submit_reason="missing outputs: ${#missing[@]}, stale outputs: ${#stale[@]}, stale invalid outputs: ${#stale_invalid[@]}"
         if [[ $FORCE -eq 1 ]]; then
             submit_reason="force"
         fi
