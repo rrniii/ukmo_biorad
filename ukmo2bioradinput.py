@@ -47,6 +47,17 @@ def process_pulse_type(src: h5py.File, pulse: str, base_name: str, output_dir: s
     if pulse not in src:
         return []
     child_keys = sorted(src[pulse].keys())
+    expected_names = {f"{base_name}_{pulse}_{key}.h5" for key in child_keys}
+    if os.path.isdir(output_dir):
+        prefix = f"{base_name}_{pulse}_"
+        for existing_name in os.listdir(output_dir):
+            if (
+                existing_name.startswith(prefix)
+                and existing_name.endswith(".h5")
+                and existing_name not in expected_names
+            ):
+                os.unlink(os.path.join(output_dir, existing_name))
+                print(f"Removed stale pvol output: {os.path.join(output_dir, existing_name)}", file=sys.stderr)
     outputs = []
     for key in child_keys:
         group_path = f"{pulse}/{key}"
