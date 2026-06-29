@@ -51,8 +51,23 @@ def process_pulse_type(src: h5py.File, pulse: str, base_name: str, output_dir: s
         out_name = f"{base_name}_{pulse}_{key}.h5"
         out_path = os.path.join(output_dir, out_name)
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        with h5py.File(out_path, "w") as dst:
-            copy_group_contents_to_root(src, group_path, dst)
+        tmp_path = os.path.join(
+            os.path.dirname(out_path),
+            f".{os.path.basename(out_path)}.{os.getpid()}.tmp",
+        )
+        try:
+            with h5py.File(tmp_path, "w") as dst:
+                copy_group_contents_to_root(src, group_path, dst)
+                dst.flush()
+            with open(tmp_path, "rb") as handle:
+                os.fsync(handle.fileno())
+            os.replace(tmp_path, out_path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
+            raise
         outputs.append(out_path)
     return outputs
 
