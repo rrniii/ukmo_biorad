@@ -24,7 +24,7 @@ DEFAULT_OUT_ROOT = "/gws/ssde/j25a/ncas_radar/vol2/avocet/ukmo-nimrod/vol2birdin
 DATASET_RE = re.compile(r"^dataset[0-9]+$")
 
 
-def remove_stale_outputs(output_dir: str, prefix: str, expected_names: set[str]):
+def remove_stale_outputs(output_dir: str, prefix: str, expected_names: set):
     """
     Remove output files for this aggregate that are no longer expected.
     This is intentionally prefix-scoped so unrelated dates or radars are untouched.
