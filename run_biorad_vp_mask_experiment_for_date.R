@@ -582,6 +582,16 @@ total_fail <- 0L
 total_skip <- 0L
 total_excluded <- 0L
 
+append_failure <- function(path, input_file, message) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  if (!file.exists(path)) {
+    cat("input_file\terror\n", file = path)
+  }
+  clean_message <- gsub("[\r\n\t]+", " ", as.character(message))
+  cat(input_file, clean_message, sep = "\t", file = path, append = TRUE)
+  cat("\n", file = path, append = TRUE)
+}
+
 for (date_dir in sort(date_dirs)) {
   if (nzchar(INPUT_FILE)) {
     files <- normalizePath(INPUT_FILE, winslash = "/", mustWork = TRUE)
@@ -598,6 +608,7 @@ for (date_dir in sort(date_dirs)) {
   out_dir_csv <- file.path(out_day, "vpts_csv")
   out_dir_h5 <- file.path(out_day, "vp_h5")
   diag_file <- file.path(DIAGNOSTICS_ROOT, rel_day, paste0(PROFILE_ID, "_mask_diagnostics.tsv"))
+  fail_file <- file.path(DIAGNOSTICS_ROOT, rel_day, paste0(PROFILE_ID, "_vp_failures.tsv"))
   dir.create(out_dir_csv, recursive = TRUE, showWarnings = FALSE)
   if (!skip_h5) dir.create(out_dir_h5, recursive = TRUE, showWarnings = FALSE)
   cleanup_stale_vp_outputs(files, out_dir_csv, out_dir_h5, skip_h5)
@@ -608,6 +619,7 @@ for (date_dir in sort(date_dirs)) {
   cat("Profile:", PROFILE_ID, " mode:", mask_mode, "\n")
   cat("Output CSV directory:", out_dir_csv, "\n")
   cat("Diagnostics:", diag_file, "\n")
+  cat("Failure log:", fail_file, "\n")
   if (skip_h5) cat("Output H5 directory : (disabled)\n\n") else cat("Output H5 directory :", out_dir_h5, "\n\n")
 
   for (f in sort(files)) {
@@ -642,6 +654,7 @@ for (date_dir in sort(date_dirs)) {
       total_ok <- total_ok + 1L
     }, error = function(e) {
       cat("  FAILED:", conditionMessage(e), "\n\n")
+      append_failure(fail_file, f, conditionMessage(e))
       total_fail <<- total_fail + 1L
     })
   }
@@ -649,4 +662,5 @@ for (date_dir in sort(date_dirs)) {
 
 cat("Excluded:", total_excluded, "\n")
 cat("Done. Success:", total_ok, " Skipped:", total_skip, " Failed:", total_fail, "\n")
-if (total_fail > 0) quit(status = 2)
+if (total_ok == 0L && total_fail > 0L) quit(status = 2)
+if (total_fail > 0L) cat("Partial pvol failures were recorded; continuing because at least one VP was produced.\n")
