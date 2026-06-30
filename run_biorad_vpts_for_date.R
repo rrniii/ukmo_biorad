@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 # Build daily VPTS time series outputs from biorad_vp per-file VP CSVs.
-# Writes one CSV per day and pulse type (lp/sp), under a radar/year tree
-# mirroring raw_h5_data_final organization.
+# Writes one CSV and optionally one HDF5 file per day and pulse type (lp/sp),
+# under a radar/year tree mirroring raw_h5_data_final organization.
 
 # Auto-add user library if bioRad is installed there.
 user_lib <- file.path(Sys.getenv("HOME", unset = "~"), "R", "library")
@@ -21,9 +21,11 @@ BASE_OUT <- Sys.getenv(
 )
 FORCE_ENV <- Sys.getenv("FORCE", unset = "0")
 CHUNK_SIZE_ENV <- Sys.getenv("CHUNK_SIZE", unset = "100")
+WRITE_H5_ENV <- Sys.getenv("WRITE_H5", unset = "1")
 
 INPUT_DIR <- ""
 force <- FALSE
+write_h5 <- TRUE
 
 is_true <- function(x) {
   x <- tolower(as.character(x))
@@ -34,7 +36,7 @@ usage <- function() {
   cat(
     "Usage: run_biorad_vpts_for_date.R <YYYYMMDD> ",
     "[--input-root PATH] [--output-root PATH] [--input-dir DIR] ",
-    "[--chunk-size N] [--force]\n",
+    "[--chunk-size N] [--force] [--write-h5] [--csv-only]\n",
     sep = ""
   )
 }
@@ -51,6 +53,7 @@ if (!grepl("^[0-9]{8}$", date_str)) {
 }
 
 force <- is_true(FORCE_ENV)
+write_h5 <- is_true(WRITE_H5_ENV)
 chunk_size <- suppressWarnings(as.integer(CHUNK_SIZE_ENV))
 if (is.na(chunk_size) || chunk_size < 1) chunk_size <- 100L
 
@@ -83,6 +86,16 @@ while (i <= length(args)) {
   }
   if (opt == "--force") {
     force <- TRUE
+    i <- i + 1
+    next
+  }
+  if (opt == "--write-h5") {
+    write_h5 <- TRUE
+    i <- i + 1
+    next
+  }
+  if (opt == "--csv-only") {
+    write_h5 <- FALSE
     i <- i + 1
     next
   }
@@ -149,6 +162,54 @@ read_vpts_chunked <- function(files, chunk_size, pulse_label) {
   as.vpts(all_df)
 }
 
+`%||%` <- function(x, y) {
+  if (is.null(x) || length(x) == 0 || is.na(x[1]) || !nzchar(x[1])) y else x[1]
+}
+
+write_vpts_h5 <- function(df, out_file, metadata) {
+  if (!requireNamespace("rhdf5", quietly = TRUE)) {
+    stop("R package rhdf5 is required for VPTS HDF5 output.", call. = FALSE)
+  }
+
+  dir.create(dirname(out_file), recursive = TRUE, showWarnings = FALSE)
+  tmp_file <- paste0(out_file, ".tmp")
+  if (file.exists(tmp_file)) unlink(tmp_file)
+  if (file.exists(out_file)) unlink(out_file)
+  rhdf5::h5createFile(tmp_file)
+  rhdf5::h5createGroup(tmp_file, "data")
+  rhdf5::h5write(names(df), tmp_file, "column_names")
+
+  for (col_name in names(df)) {
+    values <- df[[col_name]]
+    dataset <- paste0("data/", col_name)
+    if (inherits(values, "POSIXt")) {
+      rhdf5::h5write(as.numeric(values), tmp_file, dataset)
+      rhdf5::h5writeAttribute("POSIXct", tmp_file, "r_class", dataset)
+      rhdf5::h5writeAttribute(attr(values, "tzone") %||% "UTC", tmp_file, "timezone", dataset)
+    } else if (inherits(values, "Date")) {
+      rhdf5::h5write(as.numeric(values), tmp_file, dataset)
+      rhdf5::h5writeAttribute("Date", tmp_file, "r_class", dataset)
+    } else if (is.factor(values)) {
+      rhdf5::h5write(as.character(values), tmp_file, dataset)
+      rhdf5::h5writeAttribute("factor", tmp_file, "r_class", dataset)
+    } else if (is.logical(values)) {
+      rhdf5::h5write(as.integer(values), tmp_file, dataset)
+      rhdf5::h5writeAttribute("logical", tmp_file, "r_class", dataset)
+    } else {
+      rhdf5::h5write(values, tmp_file, dataset)
+      rhdf5::h5writeAttribute(class(values)[1], tmp_file, "r_class", dataset)
+    }
+  }
+
+  for (name in names(metadata)) {
+    rhdf5::h5writeAttribute(as.character(metadata[[name]]), tmp_file, name, "/")
+  }
+  rhdf5::H5close()
+  if (!file.rename(tmp_file, out_file)) {
+    stop("Failed to move temporary HDF5 output into place: ", out_file, call. = FALSE)
+  }
+}
+
 if (nzchar(INPUT_DIR)) {
   input_dir_norm <- normalizePath(INPUT_DIR, winslash = "/", mustWork = TRUE)
   if (basename(input_dir_norm) != date_str) {
@@ -188,12 +249,15 @@ for (day_dir in sort(date_dirs)) {
 
   out_lp <- file.path(out_parent, paste0(date_str, "_lp_vpts.csv"))
   out_sp <- file.path(out_parent, paste0(date_str, "_sp_vpts.csv"))
+  out_lp_h5 <- file.path(out_parent, paste0(date_str, "_lp_vpts.h5"))
+  out_sp_h5 <- file.path(out_parent, paste0(date_str, "_sp_vpts.h5"))
 
   cat("Date:", date_str, "\n")
   cat("Input day directory:", day_dir_norm, "\n")
   cat("Output parent:", out_parent, "\n")
   cat("  lp files:", length(lp_files), "\n")
   cat("  sp files:", length(sp_files), "\n")
+  cat("  H5 output:", if (write_h5) "enabled" else "disabled", "\n")
 
   if (length(lp_files) == 0 && length(sp_files) == 0) {
     cat("No lp/sp files found for day, skipping.\n\n")
@@ -202,21 +266,43 @@ for (day_dir in sort(date_dirs)) {
   }
 
   # Pulse writer wrapper to keep failure accounting per pulse.
-  write_pulse <- function(pulse, pulse_files, out_file) {
+  write_pulse <- function(pulse, pulse_files, out_csv, out_h5) {
     if (length(pulse_files) == 0) {
       cat(sprintf("  %s: no files, skip.\n", pulse))
       return("skip")
     }
-    if (!force && file.exists(out_file)) {
-      cat(sprintf("  %s: output exists, skip -> %s\n", pulse, out_file))
+    csv_exists <- file.exists(out_csv)
+    h5_exists <- file.exists(out_h5)
+    if (!force && csv_exists && (!write_h5 || h5_exists)) {
+      cat(sprintf("  %s: outputs exist, skip -> %s\n", pulse, out_csv))
       return("skip")
     }
     tryCatch({
       v <- read_vpts_chunked(pulse_files, chunk_size, pulse)
       df <- as.data.frame(v)
       df <- df[order(df$datetime, df$height), , drop = FALSE]
-      write.csv(df, out_file, row.names = FALSE)
-      cat(sprintf("  %s: wrote -> %s\n", pulse, out_file))
+      if (force || !csv_exists) {
+        write.csv(df, out_csv, row.names = FALSE)
+        cat(sprintf("  %s: wrote -> %s\n", pulse, out_csv))
+      } else {
+        cat(sprintf("  %s: CSV exists -> %s\n", pulse, out_csv))
+      }
+      if (write_h5 && (force || !h5_exists)) {
+        write_vpts_h5(
+          df,
+          out_h5,
+          list(
+            product = "vpts",
+            pulse = pulse,
+            date = date_str,
+            source = "BioDAR masked VP CSV",
+            created_utc = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+          )
+        )
+        cat(sprintf("  %s: wrote -> %s\n", pulse, out_h5))
+      } else if (write_h5) {
+        cat(sprintf("  %s: H5 exists -> %s\n", pulse, out_h5))
+      }
       "ok"
     }, error = function(e) {
       cat(sprintf("  %s: FAILED: %s\n", pulse, conditionMessage(e)))
@@ -224,8 +310,8 @@ for (day_dir in sort(date_dirs)) {
     })
   }
 
-  lp_status <- write_pulse("lp", lp_files, out_lp)
-  sp_status <- write_pulse("sp", sp_files, out_sp)
+  lp_status <- write_pulse("lp", lp_files, out_lp, out_lp_h5)
+  sp_status <- write_pulse("sp", sp_files, out_sp, out_sp_h5)
 
   if (lp_status == "fail" || sp_status == "fail") {
     total_fail <- total_fail + 1L

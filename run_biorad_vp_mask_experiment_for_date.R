@@ -635,7 +635,9 @@ for (date_dir in sort(date_dirs)) {
     out_csv <- file.path(out_dir_csv, paste0(base, "_vp.csv"))
     out_h5 <- file.path(out_dir_h5, paste0(base, "_vp.h5"))
 
-    if (!force && ((skip_h5 && file.exists(out_csv)) || (!skip_h5 && file.exists(out_csv) && file.exists(out_h5)))) {
+    csv_exists <- file.exists(out_csv)
+    h5_exists <- file.exists(out_h5)
+    if (!force && ((skip_h5 && csv_exists) || (!skip_h5 && csv_exists && h5_exists))) {
       cat("Skipping (outputs exist):", f, "\n")
       total_skip <- total_skip + 1L
       next
@@ -646,11 +648,21 @@ for (date_dir in sort(date_dirs)) {
     tryCatch({
       pvol <- read_pvolfile(f, param = PARAMS_TO_READ)
       masked <- apply_mask_profile(pvol, f)
-      run_vp_write(masked$pvol, out_csv, settings)
-      if (!skip_h5) run_vp_write(masked$pvol, out_h5, settings)
+      if (force || !csv_exists) {
+        run_vp_write(masked$pvol, out_csv, settings)
+      }
+      if (!skip_h5 && (force || !h5_exists)) {
+        run_vp_write(masked$pvol, out_h5, settings)
+      }
       append_diag(diag_file, masked$diagnostics)
-      cat("  OK ->", out_csv, "\n")
-      if (skip_h5) cat("  OK -> (H5 disabled)\n\n") else cat("  OK ->", out_h5, "\n\n")
+      if (force || !csv_exists) cat("  OK ->", out_csv, "\n") else cat("  OK ->", out_csv, "(already present)\n")
+      if (skip_h5) {
+        cat("  OK -> (H5 disabled)\n\n")
+      } else if (force || !h5_exists) {
+        cat("  OK ->", out_h5, "\n\n")
+      } else {
+        cat("  OK ->", out_h5, "(already present)\n\n")
+      }
       total_ok <- total_ok + 1L
     }, error = function(e) {
       cat("  FAILED:", conditionMessage(e), "\n\n")
